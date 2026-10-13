@@ -1,10 +1,13 @@
 import itertools
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-#for 30 days , seed=42 , and for a particular sale_date 
-def make_orders(days=30, seed=42, sale_date="2025-01-15"):
+SALE_DATE = "2025-01-15"
+
+#for 30 days , seed=42 , and for a particular sale_date
+def make_orders(days=30, seed=42, sale_date=SALE_DATE):
     rng = np.random.default_rng(seed)
     #factor=[monday,tuesday,wednesday,thursday,friday,saturday,sunday]
     factor = np.array([1, 1, 1, 1, 1, 0.8, 0.8])
@@ -80,6 +83,60 @@ def make_all_decline_rates(days=30, seed=42, incident=BAD_DEPLOY):
     return pd.concat(frames, ignore_index=True)
 
 
+def make_deploy_log():
+    """What a real company would have: what changed and when. It does NOT say who was hurt."""
+    rows = [
+        # harmless changes, so the agent can't just pick the only deploy
+        ("2025-01-08 11:00", "search-service", "deploy", "v1.8 rollout, new ranking"),
+        ("2025-01-13 10:30", "cart-service", "deploy", "v4.1 rollout, UI fixes"),
+        # the bad one (same time as BAD_DEPLOY)
+        (BAD_DEPLOY["start"], "payment-gateway", "deploy", "v2.3 rollout, new retry logic"),
+        # a payment deploy that did NOT cause any problem
+        ("2025-01-27 16:00", "payment-gateway", "deploy", "v2.4 rollout, logging change"),
+    ]
+    log = pd.DataFrame(rows, columns=["timestamp", "service", "change_type", "description"])
+    log["timestamp"] = pd.to_datetime(log["timestamp"])
+    return log
+
+
+def make_ground_truth():
+    """The answer key. Only the scoreboard may read this. Detectors never."""
+    sale_start = pd.Timestamp(SALE_DATE)
+    rows = [
+        {
+            "problem_id": 0,
+            "type": "sale_day",
+            "start": sale_start,
+            "end": sale_start + pd.Timedelta(days=1),
+            "metric": "orders",
+            "bank": None,
+            "region": None,
+            "is_anomaly": False,
+            "true_cause": "planned sale (normal traffic spike)",
+        },
+        {
+            "problem_id": 1,
+            "type": "bad_deploy",
+            "start": pd.Timestamp(BAD_DEPLOY["start"]),
+            "end": pd.Timestamp(BAD_DEPLOY["end"]),
+            "metric": "decline_rate",
+            "bank": BAD_DEPLOY["bank"],
+            "region": BAD_DEPLOY["region"],
+            "is_anomaly": True,
+            "true_cause": "payment-gateway v2.3 deploy",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def write_records(root="data"):
+    root = Path(root)
+    (root / "raw").mkdir(parents=True, exist_ok=True)
+    (root / "ground_truth").mkdir(parents=True, exist_ok=True)
+
+    make_deploy_log().to_csv(root / "raw" / "deploy_log.csv", index=False)
+    make_ground_truth().to_csv(root / "ground_truth" / "ground_truth.csv", index=False)
+
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
@@ -107,6 +164,10 @@ if __name__ == "__main__":
     window = slice(BAD_DEPLOY["start"], BAD_DEPLOY["end"])
     print("overall max in window:", overall.loc[window].max().round(3))
     print("broken series max in window:", broken.set_index("timestamp").decline_rate.loc[window].max().round(3))
+
+    write_records()
+    print(make_deploy_log())
+    print(make_ground_truth())
 
     ax = broken.plot(x="timestamp", y="decline_rate", figsize=(12, 4), label="bank_a/north")
     overall.plot(ax=ax, label="overall")
