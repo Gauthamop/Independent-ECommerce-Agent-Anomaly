@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+duckdb
+pydantic
+pyyaml
+pytest
+langgraph
+streamlit

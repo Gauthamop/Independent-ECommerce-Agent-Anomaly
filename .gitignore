@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# generated data (rebuild with the generator)
+data/raw/
+data/clean/
+*.duckdb
+
+# secrets
+.env
