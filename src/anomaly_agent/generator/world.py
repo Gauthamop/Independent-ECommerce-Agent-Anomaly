@@ -30,12 +30,20 @@ def make_orders(days=30, seed=42, sale_date="2025-01-15"):
     return pd.DataFrame({"timestamp": ts, "orders": orders})
 
 
-def make_decline_rate(bank="bank_a", region="north", days=30, seed=42, base_rate=0.04):
+def make_decline_rate(bank="bank_a", region="north", days=30, seed=42, base_rate=0.04,
+                      incident=None):
     rng = np.random.default_rng(seed)
     ts = pd.date_range("2025-01-01", periods=days * 288, freq="5min")
 
     # steady rate around 4% with small noise
     rate = rng.normal(base_rate, 0.005, size=len(ts))
+
+    # injected problem: add a jump only inside the incident window
+    if incident is not None:
+        start = pd.Timestamp(incident["start"])
+        end = pd.Timestamp(incident["end"])
+        in_window = (ts >= start) & (ts < end)
+        rate = rate + np.where(in_window, incident["jump"], 0)
 
     # a rate is a share, so it must stay between 0 and 1
     rate = np.clip(rate, 0, 1)
@@ -50,13 +58,27 @@ def make_decline_rate(bank="bank_a", region="north", days=30, seed=42, base_rate
 BANKS = ["bank_a", "bank_b", "bank_c"]
 REGIONS = ["north", "south"]
 
-#for 3 banks spread across 2 regions 
-def make_all_decline_rates(days=30, seed=42):
+# problem 1: bad deploy breaks ONE bank in ONE region (4% -> 30% for 3 hours)
+BAD_DEPLOY = {
+    "bank": "bank_a",
+    "region": "north",
+    "start": "2025-01-20 14:00",
+    "end": "2025-01-20 17:00",
+    "jump": 0.26,
+}
+
+
+#for 3 banks spread across 2 regions
+def make_all_decline_rates(days=30, seed=42, incident=BAD_DEPLOY):
     frames = []
     # 3 banks x 2 regions = 6 series; each gets its own seed so the noise differs
     for i, (bank, region) in enumerate(itertools.product(BANKS, REGIONS)):
-        frames.append(make_decline_rate(bank, region, days=days, seed=seed + i))
+        # only the series that matches the incident gets it
+        hit = incident is not None and bank == incident["bank"] and region == incident["region"]
+        frames.append(make_decline_rate(bank, region, days=days, seed=seed + i,
+                                        incident=incident if hit else None))
     return pd.concat(frames, ignore_index=True)
+
 
 
 if __name__ == "__main__":
@@ -77,5 +99,16 @@ if __name__ == "__main__":
 
     all_dr = make_all_decline_rates()
     print(all_dr.shape)
-    print(all_dr.groupby(["bank", "region"]).decline_rate.agg(["count", "mean", "std"]))
+    print(all_dr.groupby(["bank", "region"]).decline_rate.agg(["count", "mean", "std", "max"]))
+
+    # overall rate (simple average of the 6 series) vs the broken series
+    overall = all_dr.groupby("timestamp").decline_rate.mean()
+    broken = all_dr[(all_dr.bank == BAD_DEPLOY["bank"]) & (all_dr.region == BAD_DEPLOY["region"])]
+    window = slice(BAD_DEPLOY["start"], BAD_DEPLOY["end"])
+    print("overall max in window:", overall.loc[window].max().round(3))
+    print("broken series max in window:", broken.set_index("timestamp").decline_rate.loc[window].max().round(3))
+
+    ax = broken.plot(x="timestamp", y="decline_rate", figsize=(12, 4), label="bank_a/north")
+    overall.plot(ax=ax, label="overall")
+    ax.legend()
     plt.show()
