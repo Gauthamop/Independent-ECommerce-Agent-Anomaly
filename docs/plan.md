@@ -70,4 +70,7 @@ NEVER cut: synthetic data + ground truth, adapter, scoreboard, agent evaluation.
 Predict -> build by hand -> break it -> write 3-5 lines in LEARNING_LOG.md.
 
 ## Current status
-Day 0 done (repo, env, structure). Next: Day 1, synthetic data generator.
+Day 0 done (repo, env, structure). Day 1 done: synthetic generator (4 metrics, 3 problems,
+sale-day trap), messy raw files, profile YAML, adapter -> DuckDB, threshold detector,
+scoreboard, 9 pytest tests. Baseline scoreboard: 3/3 found, 2 false alarms (sale day),
+leak found after ~7.5 days. Next: Step 2, seasonal baseline + sale-day flag.

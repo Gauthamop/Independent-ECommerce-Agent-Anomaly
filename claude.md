@@ -29,4 +29,4 @@ Messy raw files -> adapter -> DuckDB -> detectors -> agent tools -> report
 - Tools: Python, pandas, DuckDB, pydantic, pytest, LangGraph.
 
 ## Current status
-Day 0 done (repo set up). Next: Day 1, synthetic data generator.
+Day 1 done (generator, adapter, threshold detector, scoreboard). Next: seasonal baseline detector.

@@ -1,0 +1,57 @@
+# Everything e-commerce-specific lives HERE (and in the generator).
+# The adapter, detectors, tools and agent only read this file; they never hard-code these names.
+
+timezone: Asia/Kolkata        # raw files are in local time; the clean tables are UTC
+
+# metric type decides which detector the registry will pick later
+metrics:
+  orders:       {type: count}
+  decline_rate: {type: rate}
+  latency_ms:   {type: gauge}
+  memory_pct:   {type: gauge}
+
+# fixed alert limits, like an ops team would set by hand (the baseline to beat)
+thresholds:
+  orders:       {upper: 200}
+  decline_rate: {upper: 0.10}
+  latency_ms:   {upper: 300}
+  memory_pct:   {upper: 85}
+
+# how to read each messy raw file.
+# 'pattern' is a regex on the column name. Named groups become the entity and tags,
+# so a 7th bank would be picked up with no code change.
+sources:
+  - file: orders_export.csv
+    time_col: ts_local
+    time_format: "%d/%m/%Y %H:%M"
+    columns:
+      - {pattern: '^ord_cnt$', metric: orders, entity: "all"}
+
+  - file: payments_wide.csv
+    time_col: "Time (IST)"
+    time_format: "%Y-%m-%d %H:%M:%S"
+    columns:
+      - pattern: '^dclnrt_(?P<bank>bank_[a-z])_(?P<region>north|south)$'
+        metric: decline_rate
+        entity: "{bank}/{region}"
+        tags: [bank, region]
+
+  - file: infra_wide.csv
+    time_col: time_ist
+    time_format: "%d-%b-%Y %H:%M"
+    columns:
+      - pattern: '^lat_ms_(?P<region>north|south)$'
+        metric: latency_ms
+        entity: "{region}"
+        tags: [region]
+      - pattern: '^mem_pct_(?P<server>server_\d+)$'
+        metric: memory_pct
+        entity: "{server}"
+        tags: [server]
+
+# the agent's "what changed?" source
+changes:
+  file: deploy_log.csv
+  time_col: when_local
+  time_format: "%Y-%m-%d %H:%M"
+  columns: {service: svc, change_type: kind, description: note}
