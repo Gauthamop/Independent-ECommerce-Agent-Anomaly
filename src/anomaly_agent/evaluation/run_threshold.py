@@ -19,9 +19,9 @@ def main(profile_path="profiles/ecommerce.yaml", db_path="data/clean/anomaly.duc
 
     alerts = detect_threshold(metrics, limits, min_points=min_points)
 
-    # the anomalies table: detector output, ready for the agent tools later
+    # kept apart from `anomalies`, which run_compare.py fills with the final system's alerts
     con.register("alerts", alerts)
-    con.execute("CREATE OR REPLACE TABLE anomalies AS SELECT * FROM alerts")
+    con.execute("CREATE OR REPLACE TABLE anomalies_threshold AS SELECT * FROM alerts")
     con.close()
 
     print(alerts.to_string(index=False))

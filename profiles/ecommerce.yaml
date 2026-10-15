@@ -17,6 +17,29 @@ thresholds:
   latency_ms:   {upper: 300}
   memory_pct:   {upper: 85}
 
+# which detectors run for each metric TYPE (the registry reads this)
+detectors:
+  count: [seasonal]
+  rate:  [seasonal]
+  gauge: [seasonal, drift]
+
+detector_params:
+  seasonal:
+    train_days: 8        # clean learning period at the start (no known problems in it)
+    z_threshold: 4.0
+    min_points: 3
+  drift:
+    window: 288          # 1 day of 5-minute points
+    lookback: 288
+    z_threshold: 6.0
+    min_rel_change: 0.01 # at least 1% of the normal level per day
+    train_days: 8
+    min_points: 3
+
+# planned events from the company calendar (dates are UTC days). Counts may surge on these days.
+events:
+  - {date: "2025-01-15", name: sale}
+
 # how to read each messy raw file.
 # 'pattern' is a regex on the column name. Named groups become the entity and tags,
 # so a 7th bank would be picked up with no code change.

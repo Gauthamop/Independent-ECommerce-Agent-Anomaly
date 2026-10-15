@@ -73,4 +73,8 @@ Predict -> build by hand -> break it -> write 3-5 lines in LEARNING_LOG.md.
 Day 0 done (repo, env, structure). Day 1 done: synthetic generator (4 metrics, 3 problems,
 sale-day trap), messy raw files, profile YAML, adapter -> DuckDB, threshold detector,
 scoreboard, 9 pytest tests. Baseline scoreboard: 3/3 found, 2 false alarms (sale day),
-leak found after ~7.5 days. Next: Step 2, seasonal baseline + sale-day flag.
+leak found after ~7.5 days.
+Steps 2-3 done: seasonal baseline (hour-of-week median/MAD, event calendar in profile),
+drift detector, detector registry by metric type. Scoreboard (minutes to detect leak):
+threshold 10840 / seasonal 1330 / seasonal+drift 705; false alarms 2 -> 0; 14 tests pass.
+Next: Step 4, agent tools (query_metric, compare_segments, get_recent_changes).
