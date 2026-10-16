@@ -22,10 +22,12 @@ class AgentState(TypedDict, total=False):
     steps: int
     max_steps: int
     action: dict
+    judgement: dict
+    llm_notes: list
     report: dict
 
 
-def build_graph(tools, planner=rule_planner):
+def build_graph(tools, planner=rule_planner, judge=None):
     def plan(state):
         if state["steps"] >= state["max_steps"]:
             return {"action": None}  # step limit: stop and report what we have
@@ -42,23 +44,32 @@ def build_graph(tools, planner=rule_planner):
         }]
         return {"evidence": evidence, "steps": state["steps"] + 1}
 
+    def judge_node(state):
+        if judge is None:
+            return {}
+        judgement, notes = judge(state)
+        return {"judgement": judgement, "llm_notes": notes}
+
     def report(state):
         return {"report": build_report(state).model_dump()}
 
     graph = StateGraph(AgentState)
     graph.add_node("plan", plan)
     graph.add_node("act", act)
+    graph.add_node("judge", judge_node)
     graph.add_node("report", report)
     graph.add_edge(START, "plan")
-    graph.add_conditional_edges("plan", lambda s: "act" if s.get("action") else "report",
-                                {"act": "act", "report": "report"})
+    graph.add_conditional_edges("plan", lambda s: "act" if s.get("action") else "judge",
+                                {"act": "act", "judge": "judge"})
     graph.add_edge("act", "plan")
+    graph.add_edge("judge", "report")
     graph.add_edge("report", END)
     return graph.compile()
 
 
-def investigate(incident, tools, planner=rule_planner, max_steps=6):
+def investigate(incident, tools, planner=rule_planner, max_steps=6, judge=None):
     """Run the agent on one incident. Returns (Report-as-dict, evidence list)."""
-    app = build_graph(tools, planner)
-    final = app.invoke({"incident": incident, "evidence": [], "steps": 0, "max_steps": max_steps})
+    app = build_graph(tools, planner, judge)
+    final = app.invoke({"incident": incident, "evidence": [], "steps": 0, "max_steps": max_steps,
+                        "judgement": {}, "llm_notes": []})
     return final["report"], final["evidence"]

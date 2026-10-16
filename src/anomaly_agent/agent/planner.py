@@ -30,6 +30,33 @@ def _calls(state, tool):
     return [e for e in state["evidence"] if e["tool"] == tool]
 
 
+ONSET_TOLERANCE_MIN = 60  # an estimated onset may be a bit early, so accept changes this much after it
+
+
+def estimated_onset(state):
+    """The onset (ISO text) found by an estimate_onset call, or None."""
+    for e in _calls(state, "estimate_onset"):
+        if e["result"].get("onset"):
+            return e["result"]["onset"]
+    return None
+
+
+def onset_args(inc):
+    start, _ = incident_window(inc)
+    return {"metric": inc["metric"], "entity": inc["entity"], "detected_at": _iso(start),
+            "lookback_hours": GRADUAL_LOOKBACK_H}
+
+
+def changes_args(state, hours):
+    """Arguments for get_recent_changes. A slow problem is noticed late, so once its onset has been
+    estimated we look for changes around THAT time, not around the late first alert."""
+    onset = estimated_onset(state)
+    if onset:
+        return {"before": onset, "lookback_hours": hours, "tolerance_minutes": ONSET_TOLERANCE_MIN}
+    start, _ = incident_window(state["incident"])
+    return {"before": _iso(start), "lookback_hours": hours}
+
+
 def rule_planner(state):
     inc = state["incident"]
     start, win_end = incident_window(inc)
@@ -42,13 +69,16 @@ def rule_planner(state):
         return {"tool": "compare_segments", "args": {
             "metric": inc["metric"], "start": _iso(start), "end": _iso(win_end)}}
 
+    if is_gradual(inc) and not _calls(state, "estimate_onset"):
+        return {"tool": "estimate_onset", "args": onset_args(inc)}
+
     changes = _calls(state, "get_recent_changes")
     if not changes:
         hours = GRADUAL_LOOKBACK_H if is_gradual(inc) else ABRUPT_LOOKBACK_H
-        return {"tool": "get_recent_changes", "args": {"before": _iso(start), "lookback_hours": hours}}
+        return {"tool": "get_recent_changes", "args": changes_args(state, hours)}
 
     last = changes[-1]["result"]
     if last["n_found"] == 0 and last["lookback_hours"] < WIDE_LOOKBACK_H:
-        return {"tool": "get_recent_changes", "args": {"before": _iso(start), "lookback_hours": WIDE_LOOKBACK_H}}
+        return {"tool": "get_recent_changes", "args": changes_args(state, WIDE_LOOKBACK_H)}
 
     return None

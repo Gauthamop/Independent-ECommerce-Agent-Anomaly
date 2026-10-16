@@ -9,5 +9,9 @@ data/raw/
 data/clean/
 *.duckdb
 
+# real data: downloaded from NAB (own licence, re-run the download script) and rebuilt tables
+data/real/nab_raw/
+data/real/clean/
+
 # secrets
 .env

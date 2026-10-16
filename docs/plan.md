@@ -84,4 +84,15 @@ fraud burst = low ("no recent change; probably external"). 25 tests pass.
 Step 6 done: agent evaluation (evaluation/agent_eval.py). Top cause correct 3/3, cause removed
 from the log handled 2/2 (low confidence, no confident blame), 0 overconfident wrong answers,
 all claims cited. 29 tests pass.
-Next: Step 7, fraud model (Kaggle credit card data), then Step 8 Streamlit + README.
+Added after step 6: Groq LLM agent (planner + relatedness judge with a scored rubric and metric descriptions;
+validated, falls back to rules), 3 "unrelated decoy" eval cases (rules 5/8, Groq 8/8, key in .env, default model
+openai/gpt-oss-120b), real-data test on 4 NAB series (profiles/nab.yaml, src/anomaly_agent/real/), and a second
+Streamlit app (app_llm.py, port 8502) that reuses the original app.py (unchanged, port 8501). 82 tests pass.
+Known gaps: events need a duration (holidays are missed by the agent), "normal" is learned once so real series
+that shift level raise many alerts, true deploy now Medium (strict judge gave it 0.5).
+Two fixes tried: (1) onset estimation for slow problems (estimate_onset tool, CUSUM; leak confidence Medium->High
+for the rule agent) = works; (2) service catalog for the judge = NO measurable benefit in one sample, so OFF by
+default (llm_parts use_services=False). LLM judge scores vary between runs and Groq's free daily token limit was
+hit, so the evaluation now flags llm_fallback rows; measure stability with evaluation/judge_stability.py after reset.
+96 tests pass.
+Next: Step 7, fraud model (Kaggle credit card data), then README.

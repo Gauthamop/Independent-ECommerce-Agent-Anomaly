@@ -1,0 +1,67 @@
+# Profile for REAL data: four series from the Numenta Anomaly Benchmark (NAB).
+# Same adapter, same detectors, same registry as the made-up shop: only this file changes.
+# NAB timestamps carry no timezone; they are read as UTC.
+
+timezone: UTC
+
+metrics:
+  taxi_trips:          {type: count, description: "number of NYC taxi passengers picked up per 30 minutes"}
+  cpu_percent:         {type: gauge, description: "CPU utilisation percent of an AWS server group (an auto-scaling misconfiguration)"}
+  request_latency:     {type: gauge, description: "response time of requests to an EC2 server (a system failure)"}
+  machine_temperature: {type: gauge, description: "internal temperature of an industrial machine (failures)"}
+
+detectors:
+  count: [seasonal]
+  gauge: [seasonal, drift]
+
+detector_params:
+  seasonal: {train_days: 8, z_threshold: 4.0, min_points: 3}
+  drift: {window: 288, lookback: 288, z_threshold: 6.0, min_rel_change: 0.01, train_days: 8, min_points: 3}
+
+# per-dataset settings. train_days is a CLEAN learning period at the start of each series: it must
+# end before that series' first labelled anomaly window (a company would know its own quiet period).
+overrides:
+  taxi_trips:
+    seasonal: {train_days: 28, min_points: 2}   # 30-minute points: 2 in a row = 1 hour; 4 weeks to learn weekly shape
+  cpu_percent:
+    seasonal: {train_days: 7}
+    drift: {train_days: 7}
+  request_latency:
+    seasonal: {train_days: 6}
+    drift: {train_days: 6}
+  machine_temperature:
+    seasonal: {train_days: 7}
+    drift: {train_days: 7}
+
+# no planned-event calendar here: NAB counts holidays as anomalies, and we want to see them found.
+events: []
+
+sources:
+  - file: nab_raw/nyc_taxi.csv
+    time_col: timestamp
+    time_format: "%Y-%m-%d %H:%M:%S"
+    columns:
+      - {pattern: '^value$', metric: taxi_trips, entity: "nyc"}
+  - file: nab_raw/cpu_utilization_asg_misconfiguration.csv
+    time_col: timestamp
+    time_format: "%Y-%m-%d %H:%M:%S"
+    columns:
+      - {pattern: '^value$', metric: cpu_percent, entity: "asg"}
+  - file: nab_raw/ec2_request_latency_system_failure.csv
+    time_col: timestamp
+    time_format: "%Y-%m-%d %H:%M:%S"
+    columns:
+      - {pattern: '^value$', metric: request_latency, entity: "ec2"}
+  - file: nab_raw/machine_temperature_system_failure.csv
+    time_col: timestamp
+    time_format: "%Y-%m-%d %H:%M:%S"
+    columns:
+      - {pattern: '^value$', metric: machine_temperature, entity: "machine"}
+
+# the agent's "what changed?" source: a hand-written calendar of NYC events (only for the taxi series).
+# The other three datasets come with NO change records, which is itself a realistic test.
+changes:
+  file: nyc_events.csv
+  time_col: when
+  time_format: "%Y-%m-%d %H:%M"
+  columns: {service: svc, change_type: kind, description: note}

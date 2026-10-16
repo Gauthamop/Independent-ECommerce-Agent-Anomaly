@@ -23,20 +23,20 @@ def run_detectors(metrics, metric_info, profile):
     params = profile.get("detector_params", {})
     event_days = [e["date"] for e in profile.get("events", [])]
 
+    overrides = profile.get("overrides", {})  # per-metric settings, e.g. a slower sampling rate
     frames = []
     for metric_type, names in profile["detectors"].items():
-        subset = metrics[metrics["metric"].map(types) == metric_type]
-        if subset.empty:
-            continue
-        for name in names:
-            kwargs = dict(params.get(name, {}))
-            if name == "seasonal":
-                kwargs["event_days"] = event_days
-                # volume (count) metrics are expected to surge on planned event days
-                kwargs["suppress_upward_on_events"] = metric_type == "count"
-            if name == "threshold":
-                kwargs["limits"] = profile["thresholds"]
-            frames.append(DETECTORS[name](subset, **kwargs))
+        of_type = metrics[metrics["metric"].map(types) == metric_type]
+        for metric, subset in of_type.groupby("metric"):
+            for name in names:
+                kwargs = {**params.get(name, {}), **overrides.get(metric, {}).get(name, {})}
+                if name == "seasonal":
+                    kwargs["event_days"] = event_days
+                    # volume (count) metrics are expected to surge on planned event days
+                    kwargs["suppress_upward_on_events"] = metric_type == "count"
+                if name == "threshold":
+                    kwargs["limits"] = profile["thresholds"]
+                frames.append(DETECTORS[name](subset, **kwargs))
 
     frames = [f for f in frames if not f.empty]
     if not frames:

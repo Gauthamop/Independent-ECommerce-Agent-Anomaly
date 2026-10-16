@@ -29,4 +29,5 @@ Messy raw files -> adapter -> DuckDB -> detectors -> agent tools -> report
 - Tools: Python, pandas, DuckDB, pydantic, pytest, LangGraph.
 
 ## Current status
-Steps 1-6 done (generator, adapter, scoreboard, 3 detectors, registry, agent tools, LangGraph agent, agent evaluation). Next: fraud model.
+Steps 1-6 done (generator, adapter, scoreboard, 3 detectors, registry, agent tools, LangGraph agent, agent evaluation)
+plus Groq LLM agent, real-data (NAB) test, and a second Streamlit app (app_llm.py). Next: fraud model, then README.

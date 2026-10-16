@@ -36,7 +36,6 @@ SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#62
 DETECTOR_COLOR = {"seasonal": SERIES[0], "drift": SERIES[1], "threshold": SERIES[2]}
 MUTED = "#898781"
 
-st.set_page_config(page_title="Anomaly Agent Explorer", layout="wide")
 alt.data_transformers.disable_max_rows()
 
 
@@ -479,6 +478,7 @@ PAGES = {
 
 
 def main():
+    st.set_page_config(page_title="Anomaly Agent Explorer", layout="wide")
     st.sidebar.title("Anomaly Agent")
     if st.sidebar.button("Rebuild data (raw -> clean -> alerts)"):
         with st.spinner("Rebuilding..."):
@@ -499,4 +499,5 @@ def main():
     PAGES[page](core, truth, profile)
 
 
-main()
+if __name__ == "__main__":  # so the LLM / real-data app can import these pages without running this app
+    main()

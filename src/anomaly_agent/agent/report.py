@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from src.anomaly_agent.agent.planner import is_gradual
 
 MIN_CAUSE_SCORE = 0.05     # weaker candidates are not worth listing
+ONSET_GRACE_MIN = 180      # an estimated onset is a little late: changes this close count as simultaneous
+ONSET_SCALE_MIN = 120      # beyond the grace, how fast "just before" fades (minutes)
 
 
 class Cause(BaseModel):
@@ -18,6 +20,9 @@ class Cause(BaseModel):
     evidence_ids: list[str]
     service: str | None = None       # the change's service; None for "no change found"
     change_time: str | None = None   # the change's time, "YYYY-MM-DD HH:MM"
+    timing_score: float | None = None    # how close in time (before any LLM judgement)
+    relatedness: float | None = None     # LLM's 0..1 plausibility that this change affects this metric
+    llm_reason: str | None = None        # the LLM's one-line reason (untrusted text)
 
 
 class Report(BaseModel):
@@ -41,6 +46,8 @@ class Report(BaseModel):
         ]
         for i, c in enumerate(self.top_causes, 1):
             lines.append(f"  {i}. {c.description} (score {c.score}) {' '.join(f'[{e}]' for e in c.evidence_ids)}")
+            if c.relatedness is not None:
+                lines.append(f"       timing {c.timing_score}, LLM relatedness {c.relatedness}: {c.llm_reason}")
         lines += [f"Confidence    : {self.confidence}", f"Suggested     : {self.suggested_action}", "Evidence      :"]
         lines += [f"  {e}" for e in self.evidence]
         if self.notes:
@@ -66,6 +73,8 @@ def _summary(e):
         detail = f"n_points={r['n_points']}, mean={r.get('mean')}, min={r.get('min')}, max={r.get('max')}"
     elif e["tool"] == "compare_segments":
         detail = f"{r['n_entities']} series, {r.get('n_changed')} changed"
+    elif e["tool"] == "estimate_onset":
+        detail = f"onset={r.get('onset')} ({r.get('hours_before_alert', '?')} h before the alert)"
     else:
         detail = f"{r['n_found']} change(s) found"
     return f"[{e['id']}] {e['tool']}({args}) -> {detail}"
@@ -95,7 +104,14 @@ def build_report(state):
 
     since = (f"{pd.Timestamp(inc['start'])} UTC (first alert), detected {pd.Timestamp(inc['detected_at'])} UTC "
              f"by {', '.join(inc['detectors'])}")
-    if gradual:
+    e_o = _first(state, "estimate_onset")
+    onset = e_o["result"].get("onset") if e_o else None
+    if onset and e_o["result"].get("hours_before_alert"):
+        since += (f"; this is a slow change: it is estimated to have begun at {onset} UTC, "
+                  f"{e_o['result']['hours_before_alert']} h before the first alert [{e_o['id']}]")
+    elif onset:
+        since += f"; no earlier sustained change was found, so the alert time is the start [{e_o['id']}]"
+    elif gradual:
         since += "; this is a slow change, so it probably began earlier than the first alert"
 
     # ---- who is affected ------------------------------------------------------------
@@ -107,25 +123,38 @@ def build_report(state):
         names = ", ".join(f"{t['entity']} {t['tags'] or ''} ({t['change_pct']:+.0f}%)".replace("  ", " ") for t in hit)
         localized = r["n_changed"] == 1
         who = f"{r['n_changed']} of {r['n_entities']} series changed (by {limit}% or more): {names or 'none'}"
-        if localized:
+        if localized and r["n_entities"] > 1:
             who += f". The others look normal (median change {r['rest_median_abs_change_pct']}%)"
         who += f" [{e_c['id']}]"
     else:
         who = "not enough evidence: the segments were not compared"
 
     # ---- causes ---------------------------------------------------------------------
+    # the optional LLM judgement: {"service|time": {"relatedness": 0..1, "reason": str}}
+    judgement = state.get("judgement") or {}
     candidates = {}
     for e in change_ev:
         for ch in e["result"]["changes"]:
-            scale = 24 * 60 if gradual else 60  # minutes: how fast "just before" fades
-            score = math.exp(-ch["minutes_before"] / scale)
+            if onset and e["args"].get("before") == onset:
+                # measured from the ESTIMATED start; the estimate runs a little late, so allow for that
+                timing = math.exp(-max(0, ch["minutes_before"] - ONSET_GRACE_MIN) / ONSET_SCALE_MIN)
+            else:
+                scale = 24 * 60 if gradual else 60  # minutes: how fast "just before" fades
+                timing = math.exp(-ch["minutes_before"] / scale)
+            j = judgement.get(f"{ch['service']}|{ch['time']}")
+            # an unrelated change keeps 20% of its timing score, so a wrong LLM verdict cannot erase it
+            score = timing * (0.2 + 0.8 * j["relatedness"]) if j else timing
             key = (ch["time"], ch["service"])
             if score >= MIN_CAUSE_SCORE and (key not in candidates or candidates[key][0] < score):
                 desc = (f"{ch['service']} {ch['change_type']} at {ch['time']}: {ch['description']} "
                         f"({ch['minutes_before']} min before onset)")
-                candidates[key] = (score, desc, e["id"], ch["service"], ch["time"])
-    causes = [Cause(description=d, score=round(s, 2), evidence_ids=[eid], service=svc, change_time=t)
-              for s, d, eid, svc, t in sorted(candidates.values(), reverse=True)[:3]]
+                candidates[key] = (score, desc, e["id"], ch["service"], ch["time"], timing, j)
+    causes = [Cause(description=d, score=round(s, 2), evidence_ids=[eid], service=svc, change_time=t,
+                    timing_score=round(timing, 2) if j else None,
+                    relatedness=round(j["relatedness"], 2) if j else None,
+                    llm_reason=j["reason"] if j else None)
+              for s, d, eid, svc, t, timing, j in sorted(candidates.values(), key=lambda c: -c[0])[:3]]
+    notes += state.get("llm_notes") or []
 
     if not change_ev:
         notes.append("Recent changes were not checked (step limit reached), so no cause can be given: not enough evidence.")
@@ -146,9 +175,12 @@ def build_report(state):
     top = causes[0] if causes else None
     if top is None:
         action = "Evidence is incomplete. Run the investigation again with more steps before acting."
-    elif top.score > 0:
+    elif top.score > 0 and confidence != "low":
         action = (f"Review or roll back the top candidate ({top.description.split(': ')[0]}), "
                   f"then watch {inc['metric']} for {inc['entity']}.")
+    elif top.score > 0:
+        action = (f"Only a weak lead ({top.description.split(': ')[0]}). Check it, but also look at external "
+                  f"factors for {inc['entity']}; do not roll anything back on this evidence alone.")
     else:
         action = (f"No related change found. Check external factors for {inc['entity']} and escalate "
                   f"for manual review; do not roll anything back on this evidence.")

@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.anomaly_agent.evaluation.agent_eval import evaluate, summarize
+from src.anomaly_agent.evaluation.agent_eval import DECOYS, evaluate, summarize
 
 
 def alert(start, end, entity="e1"):
@@ -36,8 +36,15 @@ def test_external_problem_is_correct_only_when_agent_says_no_change(small_db):
     alerts = pd.DataFrame([alert("2025-01-03 20:00", "2025-01-03 21:00")])
     truth = make_truth([truth_row("outside", "2025-01-03 20:00", "2025-01-03 21:00", "external")])
     cases = evaluate(small_db, alerts, truth)
-    assert len(cases) == 1                       # no cause-removed twin for external problems
+    assert list(cases["case"]) == ["outside"]            # no twins unless decoys are asked for
     assert cases.loc[0, "correct"] and cases.loc[0, "confidence"] == "low" and cases.loc[0, "passed"]
+
+    cases = evaluate(small_db, alerts, truth, decoys=DECOYS)
+    # external -> one decoy twin per decoy, and no cause-removed twin
+    assert list(cases["case"]) == ["outside"] + [f"outside (decoy added: {d['service']})" for d in DECOYS]
+    # the timing-only agent is fooled by every unrelated change landing just before: a known weakness
+    twins = cases.iloc[1:]
+    assert twins["overconfident_wrong"].all() and not twins["passed"].any()
 
 
 def test_wrong_cause_fails_and_confident_wrong_is_counted(small_db):

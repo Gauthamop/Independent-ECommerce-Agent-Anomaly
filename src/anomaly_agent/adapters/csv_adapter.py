@@ -70,16 +70,30 @@ def build(profile_path="profiles/ecommerce.yaml", raw_dir="data/raw",
     metrics = pd.concat(
         [read_metric_source(s, raw_dir, tz) for s in profile["sources"]],
         ignore_index=True,
-    ).dropna(subset=["value"]).sort_values(["metric", "entity", "timestamp"])
+    ).dropna(subset=["value"])
+
+    # real exports repeat timestamps: average them, and say so (never drop data silently)
+    key = ["metric", "entity", "timestamp"]
+    n_dup = int(metrics.duplicated(key).sum())
+    if n_dup:
+        print(f"WARNING: {n_dup} duplicate timestamps were averaged")
+        metrics = metrics.groupby(key, as_index=False).agg(value=("value", "mean"), tags=("tags", "first"))
+    metrics = metrics.sort_values(key).reset_index(drop=True)[["timestamp", "entity", "metric", "value", "tags"]]
 
     metric_info = pd.DataFrame(
-        [{"metric": name, "type": spec["type"]} for name, spec in profile["metrics"].items()]
+        [{"metric": name, "type": spec["type"], "description": spec.get("description", "")}
+         for name, spec in profile["metrics"].items()]
     )
     changes = read_changes(profile["changes"], raw_dir, tz)
+    service_info = pd.DataFrame(
+        [{"service": name, "description": text} for name, text in profile.get("services", {}).items()],
+        columns=["service", "description"],
+    ).astype(str)
 
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(db_path))
-    for name, frame in [("metrics", metrics), ("metric_info", metric_info), ("changes", changes)]:
+    for name, frame in [("metrics", metrics), ("metric_info", metric_info), ("changes", changes),
+                        ("service_info", service_info)]:
         con.register("frame", frame)
         con.execute(f"CREATE OR REPLACE TABLE {name} AS SELECT * FROM frame")
         con.unregister("frame")

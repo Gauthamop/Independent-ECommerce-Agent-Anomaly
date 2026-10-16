@@ -10,6 +10,7 @@ into the SQL text), and results are short, rounded, and JSON-friendly so an agen
 No business words here: only metric / entity / tags / changes from the canonical tables.
 """
 import json
+import math
 
 import duckdb
 import numpy as np
@@ -118,24 +119,83 @@ class MetricTools:
         return out
 
     # ---- tool 3 -------------------------------------------------------------------------
-    def get_recent_changes(self, before, lookback_hours=6, limit=5):
-        """Changes (deploys, config edits) in the window before a time, closest first."""
+    def get_recent_changes(self, before, lookback_hours=6, limit=5, tolerance_minutes=0):
+        """Changes (deploys, config edits) in the window before a time, closest first.
+
+        tolerance_minutes: also accept changes up to this long AFTER `before`. Useful when `before` is
+        an estimate (see estimate_onset) that might be a little early. Such a change counts as
+        0 minutes before (it happened at the same time, as far as the estimate can tell).
+        """
         before = _ts(before)
         since = before - pd.Timedelta(hours=lookback_hours)
+        until = before + pd.Timedelta(minutes=tolerance_minutes)
         df = self._query(
             "SELECT timestamp, service, change_type, description FROM changes "
             "WHERE timestamp <= ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
-            [before.to_pydatetime(), since.to_pydatetime(), int(limit)],
+            [until.to_pydatetime(), since.to_pydatetime(), int(limit)],
         )
         return {
-            "before": _iso(before), "lookback_hours": lookback_hours, "n_found": len(df),
+            "before": _iso(before), "lookback_hours": lookback_hours, "tolerance_minutes": tolerance_minutes,
+            "n_found": len(df),
             "changes": [
                 {"time": _iso(r.timestamp), "service": r.service, "change_type": r.change_type,
                  "description": r.description,
-                 "minutes_before": int((before - pd.Timestamp(r.timestamp)).total_seconds() // 60)}
+                 "minutes_before": max(0, int((before - pd.Timestamp(r.timestamp)).total_seconds() // 60))}
                 for r in df.itertuples()
             ],
         }
 
+    # ---- tool 4 -------------------------------------------------------------------------
+    def estimate_onset(self, metric, entity, detected_at, lookback_hours=72, allowance=0.25):
+        """Estimate when a SLOW change really began. Its first alert comes late: a leak is noticed
+        hours after it starts, so matching changes against the alert time would look too far away.
 
-ALLOWED_TOOLS = ("query_metric", "compare_segments", "get_recent_changes")
+        Method (CUSUM): take the day-over-day change d(t) = x(t) - x(t - 24h), which removes the daily
+        wave. Learn the normal size of d from the early, assumed-quiet half of the window. Then run a
+        one-sided CUSUM (it only adds up changes bigger than `allowance` x the normal wobble) up to the
+        alert. The estimate is the LAST moment the CUSUM was still at zero: after that, the change kept
+        building. It tends to be a little late for very slow ramps and is close for sudden steps.
+        """
+        detected = _ts(detected_at)
+        start = detected - pd.Timedelta(hours=lookback_hours + 24)
+        df = self._query(
+            "SELECT timestamp, value FROM metrics WHERE metric = ? AND entity = ? "
+            "AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
+            [metric, entity, start.to_pydatetime(), detected.to_pydatetime()],
+        )
+        out = {"metric": metric, "entity": entity, "detected_at": _iso(detected), "onset": None,
+               "method": "CUSUM on the day-over-day change"}
+        if df.empty:
+            out["note"] = "no data"
+            return out
+        s = df.set_index("timestamp")["value"]
+        d = (s - s.shift(freq="24h")).dropna()
+        d = d[d.index >= detected - pd.Timedelta(hours=lookback_hours)]
+        half = d[d.index < d.index[0] + (detected - d.index[0]) / 2] if len(d) else d
+        if len(half) < 20:
+            out["note"] = "not enough history to estimate an onset"
+            return out
+        mu0 = half.median()
+        sigma = max(1.4826 * (half - mu0).abs().median(), 1e-9)
+
+        total, zero_at = 0.0, d.index[0]
+        for t, v in d.items():
+            total = max(0.0, total + (v - mu0) - allowance * sigma)
+            if total == 0.0:
+                zero_at = t
+        # Pure noise leaves the running sum above zero by chance. With allowance k (in wobbles), the chance
+        # it exceeds h wobbles is about exp(-2*k*h); asking for ~1% false alarms gives h = ln(100) / (2*k)
+        # (10 wobbles for k = 0.25). A real build-up is far larger than that.
+        sustained = total >= math.log(100) / (2 * allowance) * sigma
+        onset = zero_at if sustained else detected
+        out.update({
+            "onset": _iso(onset),
+            "hours_before_alert": round((detected - onset).total_seconds() / 3600, 1),
+            "normal_daily_change": _num(mu0), "normal_wobble": _num(sigma),
+            "note": ("the series was already drifting before the alert" if sustained and onset < detected
+                     else "no earlier sustained change found: the alert time is the start"),
+        })
+        return out
+
+
+ALLOWED_TOOLS = ("query_metric", "compare_segments", "get_recent_changes", "estimate_onset")

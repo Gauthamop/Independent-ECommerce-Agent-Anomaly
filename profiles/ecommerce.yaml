@@ -5,10 +5,10 @@ timezone: Asia/Kolkata        # raw files are in local time; the clean tables ar
 
 # metric type decides which detector the registry will pick later
 metrics:
-  orders:       {type: count}
-  decline_rate: {type: rate}
-  latency_ms:   {type: gauge}
-  memory_pct:   {type: gauge}
+  orders:       {type: count, description: "number of customer orders placed per minute across the whole shop"}
+  decline_rate: {type: rate,  description: "share of card payment attempts that the customer's bank declines (per bank and region)"}
+  latency_ms:   {type: gauge, description: "how long the website takes to answer a request, in milliseconds (per region)"}
+  memory_pct:   {type: gauge, description: "percent of a server's memory that is in use (per server)"}
 
 # fixed alert limits, like an ops team would set by hand (the baseline to beat)
 thresholds:
@@ -16,6 +16,15 @@ thresholds:
   decline_rate: {upper: 0.10}
   latency_ms:   {upper: 300}
   memory_pct:   {upper: 85}
+
+# what each service does: a short, neutral service catalog. The LLM judge reads it to reason about
+# whether a change to a service could plausibly affect a metric.
+services:
+  payment-gateway:  "sends card payments to the customers' banks and handles the banks' responses"
+  checkout-service: "runs the checkout flow and places orders"
+  search-service:   "serves the website's search results"
+  cart-service:     "stores the shopping cart and shows the cart page"
+  email-service:    "sends marketing and order emails to customers"
 
 # which detectors run for each metric TYPE (the registry reads this)
 detectors:

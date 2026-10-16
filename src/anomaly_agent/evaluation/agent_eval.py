@@ -22,6 +22,7 @@ import pandas as pd
 
 from src.anomaly_agent.agent.graph import investigate
 from src.anomaly_agent.agent.incidents import group_alerts
+from src.anomaly_agent.agent.planner import rule_planner
 from src.anomaly_agent.evaluation.scoreboard import load_truth
 from src.anomaly_agent.tools.metric_tools import MetricTools
 
@@ -44,11 +45,17 @@ def _cited(report):
     return causes_cited and text_cited
 
 
+def _llm_fell_back(report):
+    """True when the LLM judge failed (rate limit, network, bad reply) and the case was scored by
+    timing alone. Such a row is NOT a measurement of the LLM, and must never pass as one."""
+    return any("LLM judge unavailable" in n for n in report["notes"])
+
+
 def _short(cause):
     return "no change found" if _is_external(cause) else f"{cause['service']} @ {cause['change_time']}"
 
 
-def judge(report, problem, evidence, label):
+def grade_case(report, problem, evidence, label):
     """Compare one report with one ground-truth row."""
     top = report["top_causes"][0] if report["top_causes"] else None
     conf = report["confidence"]
@@ -75,18 +82,19 @@ def judge(report, problem, evidence, label):
     return {"case": label, "expected": expected, "got": _short(top) if top else "-",
             "confidence": conf, "correct": correct, "in_top3": in_top3,
             "overconfident_wrong": (not correct) and conf != "low",
-            "cited": cited, "steps": len(evidence), "passed": passed}
+            "cited": cited, "steps": len(evidence), "llm_fallback": _llm_fell_back(report), "passed": passed}
 
 
-def judge_cause_removed(report, evidence, label):
-    """The true cause is gone from the log. Passing = not confidently blaming anything else."""
+def judge_cause_removed(report, evidence, label, expected="no cause (removed)"):
+    """No real cause is in the log (removed, or never there). Passing = not confidently blaming
+    anything else, even a change that happened right before."""
     top = report["top_causes"][0] if report["top_causes"] else None
     cited = _cited(report)
     conf = report["confidence"]
-    return {"case": label, "expected": "no cause (removed)", "got": _short(top) if top else "-",
+    return {"case": label, "expected": expected, "got": _short(top) if top else "-",
             "confidence": conf, "correct": None, "in_top3": None,
             "overconfident_wrong": conf != "low", "cited": cited, "steps": len(evidence),
-            "passed": conf == "low" and cited}
+            "llm_fallback": _llm_fell_back(report), "passed": conf == "low" and cited}
 
 
 def _without_change(db_path, service, time, workdir):
@@ -99,8 +107,38 @@ def _without_change(db_path, service, time, workdir):
     return str(copy)
 
 
-def evaluate(db_path, alerts, truth, max_steps=6):
-    """Run the agent on every real problem (and its cause-removed twin). Returns one row per case."""
+# harmless changes with NO plausible link to a payment or server metric. Each lands just before the
+# problem, which is exactly what fools an agent that scores only by timing.
+DECOYS = (
+    {"service": "search-service", "change_type": "deploy", "minutes_before": 10,
+     "description": "v1.9 rollout, new ranking tweaks"},
+    {"service": "cart-service", "change_type": "deploy", "minutes_before": 5,
+     "description": "v4.2 rollout, button colour and layout tweaks"},
+    {"service": "email-service", "change_type": "config_change", "minutes_before": 20,
+     "description": "updated the marketing email template footer"},
+)
+
+
+def _with_decoy(db_path, start, workdir, decoy):
+    """A copy of the database with one harmless, UNRELATED change just before the problem."""
+    copy = Path(workdir) / f"decoy_{decoy['service']}.duckdb"
+    shutil.copy(db_path, copy)
+    con = duckdb.connect(str(copy))
+    con.execute("INSERT INTO changes VALUES (?, ?, ?, ?)",
+                [(pd.Timestamp(start) - pd.Timedelta(minutes=decoy["minutes_before"])).to_pydatetime(),
+                 decoy["service"], decoy["change_type"], decoy["description"]])
+    con.close()
+    return str(copy)
+
+
+def evaluate(db_path, alerts, truth, max_steps=6, planner=rule_planner, judge=None, decoys=()):
+    """Run the agent on every real problem plus its trick twins. Returns one row per case.
+
+    Twins: "cause removed" (the true change is deleted) and, when `decoys` is given, for problems
+    with an outside cause one "decoy added" twin per decoy (an unrelated change lands just before the
+    problem: a timing-only agent blames it). planner / judge default to the rule-based agent; pass
+    the LLM versions to compare. decoys defaults to none, so existing callers behave as before.
+    """
     incidents = group_alerts(alerts)
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -112,23 +150,32 @@ def evaluate(db_path, alerts, truth, max_steps=6):
                              "overconfident_wrong": False, "cited": False, "steps": 0, "passed": False})
                 continue
 
-            report, evidence = investigate(inc, MetricTools(db_path), max_steps=max_steps)
-            rows.append(judge(report, p, evidence, p.type))
+            run = lambda db: investigate(inc, MetricTools(db), planner=planner, max_steps=max_steps,
+                                         judge=judge)
+            report, evidence = run(db_path)
+            rows.append(grade_case(report, p, evidence, p.type))
 
             if p.cause_type == "change":
-                twin_db = _without_change(db_path, p.cause_service, p.cause_time, tmp)
-                report, evidence = investigate(inc, MetricTools(twin_db), max_steps=max_steps)
+                report, evidence = run(_without_change(db_path, p.cause_service, p.cause_time, tmp))
                 rows.append(judge_cause_removed(report, evidence, f"{p.type} (cause removed)"))
+            elif p.cause_type == "external":
+                for decoy in decoys:
+                    report, evidence = run(_with_decoy(db_path, p.start, tmp, decoy))
+                    rows.append(judge_cause_removed(report, evidence, f"{p.type} (decoy added: {decoy['service']})",
+                                                    expected="no confident cause (decoy added)"))
     return pd.DataFrame(rows)
 
 
 def summarize(cases):
-    real = cases[~cases["case"].str.contains("removed")]
-    removed = cases[cases["case"].str.contains("removed")]
+    is_removed = cases["case"].str.contains("removed")
+    is_decoy = cases["case"].str.contains("decoy")
+    real, removed, decoy = cases[~is_removed & ~is_decoy], cases[is_removed], cases[is_decoy]
     return {
         "top_cause_correct": f"{int(real['correct'].sum())}/{len(real)}",
         "cause_in_top3": f"{int(real['in_top3'].sum())}/{len(real)}",
         "cause_removed_handled": f"{int(removed['passed'].sum())}/{len(removed)}",
+        "decoy_handled": f"{int(decoy['passed'].sum())}/{len(decoy)}",
+        "llm_fallbacks": int(cases["llm_fallback"].sum()) if "llm_fallback" in cases else 0,
         "overconfident_wrong_answers": int(cases["overconfident_wrong"].sum()),
         "all_claims_cited": bool(cases["cited"].all()),
         "cases_passed": f"{int(cases['passed'].sum())}/{len(cases)}",
@@ -136,20 +183,32 @@ def summarize(cases):
 
 
 def main(db_path="data/clean/anomaly.duckdb", truth_path="data/ground_truth/ground_truth.csv",
-         out_path="data/clean/agent_eval.csv"):
+         out_path="data/clean/agent_eval.csv", use_llm=False):
     con = duckdb.connect(db_path, read_only=True)
     alerts = con.execute("SELECT * FROM anomalies").df()
     con.close()
 
-    cases = evaluate(db_path, alerts, load_truth(truth_path))
+    planner, judge = rule_planner, None
+    if use_llm:  # Groq planner + relatedness judge (needs GROQ_API_KEY)
+        from src.anomaly_agent.agent.llm_agent import llm_parts
+        from src.anomaly_agent.llm.groq_llm import GroqLLM
+        planner, judge = llm_parts(GroqLLM(), db_path)
+        out_path = out_path.replace(".csv", "_llm.csv")
+
+    cases = evaluate(db_path, alerts, load_truth(truth_path), planner=planner, judge=judge, decoys=DECOYS)
     cases.to_csv(out_path, index=False)
 
-    print("\n=== AGENT EVALUATION ===")
+    print(f"\n=== AGENT EVALUATION ({'Groq LLM' if use_llm else 'rule-based'}) ===")
     print(cases.drop(columns=["in_top3"]).to_string(index=False))
     print()
     for key, value in summarize(cases).items():
         print(f"{key:>28}: {value}")
+    if use_llm and cases["llm_fallback"].any():
+        print(f"\nWARNING: the LLM judge was unavailable in {int(cases['llm_fallback'].sum())} case(s) "
+              "(rate limit or network?). Those rows were scored by timing alone: do not read them as LLM results.")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    main(use_llm="--llm" in sys.argv)
