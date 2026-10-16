@@ -29,4 +29,4 @@ Messy raw files -> adapter -> DuckDB -> detectors -> agent tools -> report
 - Tools: Python, pandas, DuckDB, pydantic, pytest, LangGraph.
 
 ## Current status
-Steps 1-3 done (generator, adapter, scoreboard, threshold + seasonal + drift detectors, registry). Next: agent tools.
+Steps 1-6 done (generator, adapter, scoreboard, 3 detectors, registry, agent tools, LangGraph agent, agent evaluation). Next: fraud model.

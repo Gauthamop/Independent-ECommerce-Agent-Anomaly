@@ -77,4 +77,11 @@ leak found after ~7.5 days.
 Steps 2-3 done: seasonal baseline (hour-of-week median/MAD, event calendar in profile),
 drift detector, detector registry by metric type. Scoreboard (minutes to detect leak):
 threshold 10840 / seasonal 1330 / seasonal+drift 705; false alarms 2 -> 0; 14 tests pass.
-Next: Step 4, agent tools (query_metric, compare_segments, get_recent_changes).
+Steps 4-5 done: read-only tools (query_metric, compare_segments, get_recent_changes),
+incident grouping, LangGraph agent (plan -> act -> report, step limit, rule-based planner,
+cited evidence). Agent reports on 3 incidents: deploy = high confidence, leak = medium,
+fraud burst = low ("no recent change; probably external"). 25 tests pass.
+Step 6 done: agent evaluation (evaluation/agent_eval.py). Top cause correct 3/3, cause removed
+from the log handled 2/2 (low confidence, no confident blame), 0 overconfident wrong answers,
+all claims cited. 29 tests pass.
+Next: Step 7, fraud model (Kaggle credit card data), then Step 8 Streamlit + README.

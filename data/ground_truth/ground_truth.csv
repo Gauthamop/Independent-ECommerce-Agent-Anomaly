@@ -1,5 +1,5 @@
-problem_id,type,start,end,metric,series,bank,region,is_anomaly,true_cause,server
-0,sale_day,2025-01-15 00:00:00,2025-01-16 00:00:00,orders,orders:all,,,False,planned sale (normal traffic spike),
-1,bad_deploy,2025-01-20 14:00:00,2025-01-20 17:00:00,decline_rate,decline_rate:bank_a/north,bank_a,north,True,payment-gateway v2.3 deploy,
-2,memory_leak,2025-01-23 00:00:00,2025-01-31 00:00:00,memory_pct,memory_pct:server_2,,,True,checkout-service config change (cache limit removed),server_2
-3,fraud_burst,2025-01-09 03:00:00,2025-01-09 03:45:00,orders+decline_rate,orders:all;decline_rate:bank_c/south,bank_c,south,True,card-testing attack (external; no matching change in deploy log),
+problem_id,type,start,end,metric,series,bank,region,is_anomaly,true_cause,cause_type,cause_service,cause_time,server
+0,sale_day,2025-01-15 00:00:00,2025-01-16 00:00:00,orders,orders:all,,,False,planned sale (normal traffic spike),none,,,
+1,bad_deploy,2025-01-20 14:00:00,2025-01-20 17:00:00,decline_rate,decline_rate:bank_a/north,bank_a,north,True,payment-gateway v2.3 deploy,change,payment-gateway,2025-01-20 14:00,
+2,memory_leak,2025-01-23 00:00:00,2025-01-31 00:00:00,memory_pct,memory_pct:server_2,,,True,checkout-service config change (cache limit removed),change,checkout-service,2025-01-23 00:00,server_2
+3,fraud_burst,2025-01-09 03:00:00,2025-01-09 03:45:00,orders+decline_rate,orders:all;decline_rate:bank_c/south,bank_c,south,True,card-testing attack (external; no matching change in deploy log),external,,,

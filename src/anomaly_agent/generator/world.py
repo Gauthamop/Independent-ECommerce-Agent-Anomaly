@@ -81,6 +81,7 @@ REGIONS = ["north", "south"]
 BAD_DEPLOY = {
     "bank": "bank_a",
     "region": "north",
+    "service": "payment-gateway",   # the change that caused it (also in the deploy log)
     "start": "2025-01-20 14:00",
     "end": "2025-01-20 17:00",
     "jump": 0.26,
@@ -103,6 +104,7 @@ SERVERS = ["server_1", "server_2", "server_3"]
 # problem 2: slow memory leak on ONE server (rises ~36 points over 8 days)
 MEMORY_LEAK = {                   #we purposely created one where there is an increase of memory leak of 36
     "server": "server_2",
+    "service": "checkout-service",  # the change that caused it (also in the deploy log)
     "start": "2025-01-23 00:00",
     "end": "2025-01-31 00:00",
     "rise": 36,
@@ -164,11 +166,11 @@ def make_deploy_log():
         ("2025-01-08 11:00", "search-service", "deploy", "v1.8 rollout, new ranking"),
         ("2025-01-13 10:30", "cart-service", "deploy", "v4.1 rollout, UI fixes"),
         # the bad one (same time as BAD_DEPLOY)
-        (BAD_DEPLOY["start"], "payment-gateway", "deploy", "v2.3 rollout, new retry logic"),
+        (BAD_DEPLOY["start"], BAD_DEPLOY["service"], "deploy", "v2.3 rollout, new retry logic"),
         # a payment deploy that did NOT cause any problem
         ("2025-01-27 16:00", "payment-gateway", "deploy", "v2.4 rollout, logging change"),
         # the cause of the memory leak (same time as MEMORY_LEAK)
-        (MEMORY_LEAK["start"], "checkout-service", "config_change", "removed cache size limit"),
+        (MEMORY_LEAK["start"], MEMORY_LEAK["service"], "config_change", "removed cache size limit"),
     ]
     log = pd.DataFrame(rows, columns=["timestamp", "service", "change_type", "description"])
     log["timestamp"] = pd.to_datetime(log["timestamp"])
@@ -190,6 +192,7 @@ def make_ground_truth():
             "region": None,
             "is_anomaly": False,
             "true_cause": "planned sale (normal traffic spike)",
+            "cause_type": "none",
         },
         {
             "problem_id": 1,
@@ -202,6 +205,9 @@ def make_ground_truth():
             "region": BAD_DEPLOY["region"],
             "is_anomaly": True,
             "true_cause": "payment-gateway v2.3 deploy",
+            "cause_type": "change",
+            "cause_service": BAD_DEPLOY["service"],
+            "cause_time": BAD_DEPLOY["start"],
         },
         {
             "problem_id": 2,
@@ -213,6 +219,9 @@ def make_ground_truth():
             "server": MEMORY_LEAK["server"],
             "is_anomaly": True,
             "true_cause": "checkout-service config change (cache limit removed)",
+            "cause_type": "change",
+            "cause_service": MEMORY_LEAK["service"],
+            "cause_time": MEMORY_LEAK["start"],
         },
         {
             "problem_id": 3,
@@ -225,6 +234,7 @@ def make_ground_truth():
             "region": FRAUD_BURST["region"],
             "is_anomaly": True,
             "true_cause": "card-testing attack (external; no matching change in deploy log)",
+            "cause_type": "external",
         },
     ]
     return pd.DataFrame(rows)
